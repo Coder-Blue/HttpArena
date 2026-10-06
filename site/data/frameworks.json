@@ -328,7 +328,7 @@
   },
   "cutelyst": {
     "dir": "cutelyst",
-    "description": "Cutelyst on Cutelyst::Server with one thread per core. Catalyst-style controllers and routing, QJsonDocument serialization, async delays via ASync and QTimer.",
+    "description": "Cutelyst on Cutelyst::Server with one thread per core. Catalyst-style controllers and routing, QJsonDocument serialization, async delays via ASync and QTimer, async Postgres via ASql, fortunes via Cutelee.",
     "repo": "https://github.com/cutelyst/cutelyst",
     "type": "flagship",
     "engine": "Cutelyst::Server",
