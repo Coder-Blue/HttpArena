@@ -37,5 +37,6 @@ RUN set -eu; \
 FROM alpine:3.20
 COPY --from=build /server/zig-out/bin/uwebzockets /srv/uwebzockets
 COPY entrypoint.sh /srv/entrypoint.sh
+RUN chmod 0755 /srv/entrypoint.sh
 EXPOSE 8080 8081 8082 8443 8443/udp
 ENTRYPOINT ["/srv/entrypoint.sh"]
