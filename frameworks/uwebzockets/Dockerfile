@@ -20,9 +20,6 @@ ENV PATH="/opt/zig:${PATH}"
 COPY build.zig build.zig.zon ./
 COPY src ./src
 
-# x86_64_v3 omits AES-NI / PCLMUL, which BoringSSL needs for its hardware
-# AES-GCM path; +adx speeds the RSA/Montgomery path. Both are present on every
-# v3-class server CPU.
 RUN set -eu; \
     case "${TARGETARCH:-amd64}" in \
         amd64) ZIG_TARGET=x86_64-linux-musl; ZIG_CPU=x86_64_v3+aes+pclmul+adx ;; \

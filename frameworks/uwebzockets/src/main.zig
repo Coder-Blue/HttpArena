@@ -1,6 +1,3 @@
-//! HttpArena entry for uWebZockets: HTTP/1.1 + WebSocket, h2c, HTTPS and
-//! HTTP/3 on the framework's standard APIs.
-
 const std = @import("std");
 const uz = @import("uWebZockets");
 
@@ -13,10 +10,6 @@ const Port = struct {
 
 const json_body_max = 16 * 1024;
 const gzip_level = 9;
-
-// --------------------------------------------------------- //
-// Routes
-// --------------------------------------------------------- //
 
 fn routes(app: anytype) !void {
     _ = try app.get("/baseline11", baseline);
@@ -78,10 +71,6 @@ fn pipeline(_: *uz.Request, res: *uz.Response) void {
 fn wsMessage(socket: *uz.WebSocket, message: []const u8, opcode: uz.Opcode) void {
     socket.send(message, opcode) catch {};
 }
-
-// --------------------------------------------------------- //
-// JSON
-// --------------------------------------------------------- //
 
 const Rating = struct {
     score: i64,
@@ -185,10 +174,6 @@ fn status(res: *uz.Response, text: []const u8) void {
     res.end(text, "") catch {};
 }
 
-// --------------------------------------------------------- //
-// Dataset
-// --------------------------------------------------------- //
-
 const dataset_file_max = 4 * 1024 * 1024;
 
 fn loadDataset(init: std.process.Init) void {
@@ -222,10 +207,6 @@ fn readFile(init: std.process.Init, path: []const u8) ![]u8 {
 fn datasetPath(init: std.process.Init) []const u8 {
     return init.environ_map.get("UZ_DATASET") orelse "/data/dataset.json";
 }
-
-// --------------------------------------------------------- //
-// Servers
-// --------------------------------------------------------- //
 
 fn clusterConfig(comptime connections: usize) uz.ServerConfig {
     var config = uz.ServerConfig{};
