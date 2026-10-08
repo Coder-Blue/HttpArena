@@ -1,13 +1,8 @@
+//! HttpArena entry for uWebZockets: HTTP/1.1 + WebSocket, h2c, HTTPS and
+//! HTTP/3 on the framework's standard APIs.
+
 const std = @import("std");
 const uz = @import("uWebZockets");
-
-const dataset = @import("shared/dataset.zig");
-const paths = @import("shared/paths.zig");
-
-const baseline = @import("handlers/baseline.zig");
-const json = @import("handlers/json.zig");
-const pipeline = @import("handlers/pipeline.zig");
-const ws = @import("handlers/ws.zig");
 
 const Port = struct {
     const h1 = 8080;
@@ -16,16 +11,223 @@ const Port = struct {
     const h2_h3 = 8443;
 };
 
+const json_body_max = 16 * 1024;
+const gzip_level = 9;
+
+// --------------------------------------------------------- //
+// Routes
+// --------------------------------------------------------- //
+
 fn routes(app: anytype) !void {
-    _ = try app.get(baseline.PATH, baseline.get);
-    _ = try app.post(baseline.PATH, baseline.post);
-    _ = try app.get(baseline.H2_PATH, baseline.h2);
-    _ = try app.get(pipeline.PATH, pipeline.handle);
-    _ = try app.get(json.PATH, json.handle);
-    _ = try app.ws(ws.PATH, .{ .message = ws.onMessage });
+    _ = try app.get("/baseline11", baseline);
+    _ = try app.post("/baseline11", baselineWithBody);
+    _ = try app.get("/baseline2", baseline);
+    _ = try app.get("/pipeline", pipeline);
+    _ = try app.get("/json/:count", json);
+    _ = try app.ws("/ws", .{ .message = wsMessage });
 }
 
-fn httpConfig(comptime connections: usize) uz.ServerConfig {
+fn baseline(req: *uz.Request, res: *uz.Response) void {
+    answer(req, res, false);
+}
+
+fn baselineWithBody(req: *uz.Request, res: *uz.Response) void {
+    answer(req, res, true);
+}
+
+fn answer(req: *uz.Request, res: *uz.Response, with_body: bool) void {
+    var sum = sumQuery(req);
+    if (with_body) sum += parseIntLoose(req.text());
+
+    var buffer: [24]u8 = undefined;
+    const body = std.fmt.bufPrint(&buffer, "{d}", .{sum}) catch return;
+    res.text(body) catch {};
+}
+
+fn sumQuery(req: *uz.Request) i64 {
+    const params = req.query_params() catch return 0;
+    var sum: i64 = 0;
+    var iterator = params.pairs();
+    while (iterator.next()) |pair| {
+        sum += std.fmt.parseInt(i64, pair.value, 10) catch 0;
+    }
+    return sum;
+}
+
+fn parseIntLoose(text: []const u8) i64 {
+    var index: usize = 0;
+    while (index < text.len and (text[index] == ' ' or text[index] == '\r' or text[index] == '\n')) index += 1;
+
+    var negative = false;
+    if (index < text.len and text[index] == '-') {
+        negative = true;
+        index += 1;
+    }
+
+    var value: i64 = 0;
+    while (index < text.len and text[index] >= '0' and text[index] <= '9') : (index += 1) {
+        value = value * 10 + (text[index] - '0');
+    }
+    return if (negative) -value else value;
+}
+
+fn pipeline(_: *uz.Request, res: *uz.Response) void {
+    res.text("ok") catch {};
+}
+
+fn wsMessage(socket: *uz.WebSocket, message: []const u8, opcode: uz.Opcode) void {
+    socket.send(message, opcode) catch {};
+}
+
+// --------------------------------------------------------- //
+// JSON
+// --------------------------------------------------------- //
+
+const Rating = struct {
+    score: i64,
+    count: i64,
+};
+
+const Item = struct {
+    id: i64,
+    name: []const u8,
+    category: []const u8,
+    price: i64,
+    quantity: i64,
+    active: bool,
+    tags: []const []const u8,
+    rating: Rating,
+};
+
+const ResponseItem = struct {
+    id: i64,
+    name: []const u8,
+    category: []const u8,
+    price: i64,
+    quantity: i64,
+    active: bool,
+    tags: []const []const u8,
+    rating: Rating,
+    total: i64,
+};
+
+const ResponseBody = struct {
+    items: []const ResponseItem,
+    count: usize,
+};
+
+threadlocal var response_items: [50]ResponseItem = undefined;
+
+var dataset_raw: []u8 = &.{};
+var dataset_parsed: ?std.json.Parsed([]const Item) = null;
+
+fn json(req: *uz.Request, res: *uz.Response) void {
+    const rows = datasetItems() orelse return status(res, "503 Service Unavailable");
+
+    const count_text = req.get_param("count") orelse return status(res, "400 Bad Request");
+    const count = std.fmt.parseInt(usize, count_text, 10) catch return status(res, "400 Bad Request");
+    if (count < 1 or count > rows.len or count > response_items.len) return status(res, "400 Bad Request");
+
+    const params = req.query_params() catch return status(res, "400 Bad Request");
+    const multiplier = (params.get_int(u32, "m") catch 1) orelse 1;
+
+    var rendered_buffer: [json_body_max]u8 = undefined;
+    const rendered = std.fmt.bufPrint(
+        &rendered_buffer,
+        "{f}",
+        .{std.json.fmt(render(rows, count, multiplier), .{})},
+    ) catch return status(res, "500 Internal Server Error");
+
+    if (req.header_has_token("accept-encoding", "gzip")) {
+        var input: [json_body_max]u8 = undefined;
+        var output: [json_body_max]u8 = undefined;
+        const compressed = gzip(rendered, &input, &output) catch
+            return status(res, "500 Internal Server Error");
+
+        res.end_with_headers(
+            "200 OK",
+            "Content-Type: application/json; charset=utf-8\r\nContent-Encoding: gzip\r\n",
+            compressed,
+        ) catch {};
+        return;
+    }
+
+    res.end_with_headers("200 OK", "Content-Type: application/json; charset=utf-8\r\n", rendered) catch {};
+}
+
+fn render(rows: []const Item, count: usize, multiplier: u32) ResponseBody {
+    for (rows[0..count], 0..) |row, index| {
+        response_items[index] = .{
+            .id = row.id,
+            .name = row.name,
+            .category = row.category,
+            .price = row.price,
+            .quantity = row.quantity,
+            .active = row.active,
+            .tags = row.tags,
+            .rating = row.rating,
+            .total = row.price * row.quantity * @as(i64, @intCast(multiplier)),
+        };
+    }
+    return .{ .items = response_items[0..count], .count = count };
+}
+
+fn gzip(body: []const u8, input: []u8, output: []u8) ![]const u8 {
+    var stream = try uz.compression_stream.CompressionStream.init(.gzip, gzip_level, input);
+    defer stream.deinit();
+
+    try stream.write(body);
+    if (stream.output_bound() > output.len) return error.BufferTooSmall;
+    return stream.finish(output);
+}
+
+fn status(res: *uz.Response, text: []const u8) void {
+    res.end(text, "") catch {};
+}
+
+// --------------------------------------------------------- //
+// Dataset
+// --------------------------------------------------------- //
+
+const dataset_file_max = 4 * 1024 * 1024;
+
+fn loadDataset(init: std.process.Init) void {
+    dataset_raw = readFile(init, datasetPath(init)) catch return;
+    dataset_parsed = std.json.parseFromSlice(
+        []const Item,
+        std.heap.page_allocator,
+        dataset_raw,
+        .{},
+    ) catch return;
+}
+
+fn datasetItems() ?[]const Item {
+    if (dataset_parsed) |*value| return value.value;
+    return null;
+}
+
+fn readFile(init: std.process.Init, path: []const u8) ![]u8 {
+    const file = try std.Io.Dir.cwd().openFile(init.io, path, .{ .allow_directory = false });
+    defer file.close(init.io);
+
+    const stat = try file.stat(init.io);
+    if (stat.size == 0 or stat.size > dataset_file_max) return error.BadDatasetSize;
+
+    const buffer = try std.heap.page_allocator.alloc(u8, @intCast(stat.size));
+    const read = try file.readPositionalAll(init.io, buffer, 0);
+    if (read != buffer.len) return error.UnexpectedEndOfFile;
+    return buffer;
+}
+
+fn datasetPath(init: std.process.Init) []const u8 {
+    return init.environ_map.get("UZ_DATASET") orelse "/data/dataset.json";
+}
+
+// --------------------------------------------------------- //
+// Servers
+// --------------------------------------------------------- //
+
+fn clusterConfig(comptime connections: usize) uz.ServerConfig {
     var config = uz.ServerConfig{};
     config.max_connections = connections;
     config.max_request_line_size = 1024;
@@ -36,11 +238,12 @@ fn httpConfig(comptime connections: usize) uz.ServerConfig {
     config.max_h2_body_size = 512;
     config.max_h2_response_header_size = 1024;
     config.max_h2_response_header_count = 24;
+    config.enable_dev_log = false;
     return config;
 }
 
 fn h2cConfig(comptime connections: usize) uz.ServerConfig {
-    var config = httpConfig(connections);
+    var config = clusterConfig(connections);
     config.max_h2_header_block_size = 4096;
     config.max_h2_body_size = 16 * 1024;
     config.max_h2_response_header_size = 2048;
@@ -70,10 +273,10 @@ fn runCluster(init: std.process.Init, comptime config: uz.ServerConfig, comptime
 
 fn httpMode(init: std.process.Init) !void {
     const cpus = std.Thread.getCpuCount() catch 8;
-    if (cpus >= 64) return runCluster(init, httpConfig(768), 32, Port.h1);
-    if (cpus >= 32) return runCluster(init, httpConfig(1280), 16, Port.h1);
-    if (cpus >= 16) return runCluster(init, httpConfig(2560), 8, Port.h1);
-    return runCluster(init, httpConfig(5120), 4, Port.h1);
+    if (cpus >= 64) return runCluster(init, clusterConfig(768), 32, Port.h1);
+    if (cpus >= 32) return runCluster(init, clusterConfig(1280), 16, Port.h1);
+    if (cpus >= 16) return runCluster(init, clusterConfig(2560), 8, Port.h1);
+    return runCluster(init, clusterConfig(5120), 4, Port.h1);
 }
 
 fn h2cMode(init: std.process.Init) !void {
@@ -87,8 +290,8 @@ fn h2cMode(init: std.process.Init) !void {
 fn tlsMode(init: std.process.Init) !void {
     var app = try uz.App(5120).init_https(
         init.io,
-        try nullTerminated(init, paths.certificate(init)),
-        try nullTerminated(init, paths.privateKey(init)),
+        try nullTerminated(init, certPath(init)),
+        try nullTerminated(init, keyPath(init)),
     );
     defer app.deinit();
 
@@ -101,8 +304,8 @@ fn tlsMode(init: std.process.Init) !void {
 fn h3Mode(init: std.process.Init) !void {
     var app = try uz.App(1280).init_http3(
         init.io,
-        try nullTerminated(init, paths.certificate(init)),
-        try nullTerminated(init, paths.privateKey(init)),
+        try nullTerminated(init, certPath(init)),
+        try nullTerminated(init, keyPath(init)),
     );
     defer app.deinit();
 
@@ -113,6 +316,14 @@ fn h3Mode(init: std.process.Init) !void {
     try app.run();
 }
 
+fn certPath(init: std.process.Init) []const u8 {
+    return init.environ_map.get("UZ_CERT") orelse "/certs/server.crt";
+}
+
+fn keyPath(init: std.process.Init) []const u8 {
+    return init.environ_map.get("UZ_KEY") orelse "/certs/server.key";
+}
+
 fn nullTerminated(init: std.process.Init, value: []const u8) ![:0]u8 {
     const buffer = try init.gpa.allocSentinel(u8, value.len, 0);
     @memcpy(buffer, value);
@@ -120,7 +331,7 @@ fn nullTerminated(init: std.process.Init, value: []const u8) ![:0]u8 {
 }
 
 pub fn main(init: std.process.Init) !void {
-    dataset.load(init.io, std.heap.page_allocator, paths.dataset(init));
+    loadDataset(init);
 
     const mode = init.environ_map.get("UZ_MODE") orelse "http";
     if (std.mem.eql(u8, mode, "http")) return httpMode(init);
