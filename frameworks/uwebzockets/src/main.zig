@@ -247,7 +247,6 @@ fn runCluster(init: std.process.Init, comptime config: uz.ServerConfig, comptime
         }
     }.call);
 
-    try group.catch_shutdown_signals();
     try group.listen("0.0.0.0", port);
     try group.run();
 }
@@ -277,7 +276,6 @@ fn tlsMode(init: std.process.Init) !void {
     defer app.deinit();
 
     try routes(&app);
-    try app.catch_shutdown_signals();
     try app.listen("0.0.0.0", Port.h1_tls);
     try app.run();
 }
@@ -291,7 +289,6 @@ fn h3Mode(init: std.process.Init) !void {
     defer app.deinit();
 
     try routes(&app);
-    try app.catch_shutdown_signals();
     try app.listen("0.0.0.0", Port.h2_h3);
     try app.listen_udp("0.0.0.0", Port.h2_h3);
     try app.run();
@@ -311,15 +308,25 @@ fn nullTerminated(init: std.process.Init, value: []const u8) ![:0]u8 {
     return buffer;
 }
 
+const Mode = enum { http, h2c, tls, h3 };
+
+fn serve(init: std.process.Init, mode: Mode) void {
+    const result = switch (mode) {
+        .http => httpMode(init),
+        .h2c => h2cMode(init),
+        .tls => tlsMode(init),
+        .h3 => h3Mode(init),
+    };
+    result catch |err| std.log.err("listener {s} stopped: {s}", .{ @tagName(mode), @errorName(err) });
+}
+
 pub fn main(init: std.process.Init) !void {
     loadDataset(init);
 
-    const mode = init.environ_map.get("UZ_MODE") orelse "http";
-    if (std.mem.eql(u8, mode, "http")) return httpMode(init);
-    if (std.mem.eql(u8, mode, "h2c")) return h2cMode(init);
-    if (std.mem.eql(u8, mode, "tls")) return tlsMode(init);
-    if (std.mem.eql(u8, mode, "h3")) return h3Mode(init);
-
-    std.log.err("unknown UZ_MODE '{s}'", .{mode});
-    return error.UnknownMode;
+    var threads: [4]std.Thread = undefined;
+    threads[0] = try std.Thread.spawn(.{}, serve, .{ init, Mode.http });
+    threads[1] = try std.Thread.spawn(.{}, serve, .{ init, Mode.h2c });
+    threads[2] = try std.Thread.spawn(.{}, serve, .{ init, Mode.tls });
+    threads[3] = try std.Thread.spawn(.{}, serve, .{ init, Mode.h3 });
+    for (threads) |thread| thread.join();
 }
