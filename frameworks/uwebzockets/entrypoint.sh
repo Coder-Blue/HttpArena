@@ -4,8 +4,6 @@ set -eu
 bin="${UZ_BIN:-/srv/uwebzockets}"
 pids=""
 
-# 8080 comes up after the TLS/QUIC listeners have settled: bringing it up
-# alongside them resets the first few connections under startup contention.
 for mode in h2c tls h3; do
     UZ_MODE="$mode" "$bin" &
     pids="$pids $!"
