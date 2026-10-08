@@ -4,10 +4,16 @@ set -eu
 bin="${UZ_BIN:-/srv/uwebzockets}"
 pids=""
 
-for mode in http h2c tls h3; do
+# 8080 comes up after the TLS/QUIC listeners have settled: bringing it up
+# alongside them resets the first few connections under startup contention.
+for mode in h2c tls h3; do
     UZ_MODE="$mode" "$bin" &
     pids="$pids $!"
 done
+sleep 5
+
+UZ_MODE=http "$bin" &
+pids="$pids $!"
 
 trap 'kill $pids 2>/dev/null' TERM INT
 
