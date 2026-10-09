@@ -252,6 +252,8 @@ fn runCluster(init: std.process.Init, comptime config: uz.ServerConfig, comptime
 }
 
 fn httpMode(init: std.process.Init) !void {
+    init.io.sleep(std.Io.Duration.fromMilliseconds(3000), .awake) catch {};
+
     const cpus = std.Thread.getCpuCount() catch 8;
     if (cpus >= 64) return runCluster(init, clusterConfig(768), 32, Port.h1);
     if (cpus >= 32) return runCluster(init, clusterConfig(1280), 16, Port.h1);
