@@ -107,6 +107,7 @@ const ResponseBody = struct {
 
 threadlocal var response_items: [50]ResponseItem = undefined;
 
+var http_ready = std.atomic.Value(bool).init(false);
 var dataset_raw: []u8 = &.{};
 var dataset_parsed: ?std.json.Parsed([]const Item) = null;
 
@@ -232,7 +233,7 @@ fn h2cConfig(comptime connections: usize) uz.ServerConfig {
     return config;
 }
 
-fn runCluster(init: std.process.Init, comptime config: uz.ServerConfig, comptime workers: usize, port: u16) !void {
+fn runCluster(init: std.process.Init, comptime config: uz.ServerConfig, comptime workers: usize, port: u16, is_http: bool) !void {
     var group = try uz.Server.preset(init.io, config).build_cluster(
         std.heap.page_allocator,
         workers,
@@ -248,29 +249,30 @@ fn runCluster(init: std.process.Init, comptime config: uz.ServerConfig, comptime
     }.call);
 
     try group.listen("0.0.0.0", port);
+    if (is_http) http_ready.store(true, .release);
     try group.run();
 }
 
 fn httpMode(init: std.process.Init) !void {
 
     const cpus = std.Thread.getCpuCount() catch 8;
-    if (cpus >= 64) return runCluster(init, clusterConfig(768), 32, Port.h1);
-    if (cpus >= 32) return runCluster(init, clusterConfig(1280), 16, Port.h1);
-    if (cpus >= 16) return runCluster(init, clusterConfig(2560), 8, Port.h1);
-    return runCluster(init, clusterConfig(5120), 4, Port.h1);
+    if (cpus >= 64) return runCluster(init, clusterConfig(768), 32, Port.h1, true);
+    if (cpus >= 32) return runCluster(init, clusterConfig(1280), 16, Port.h1, true);
+    if (cpus >= 16) return runCluster(init, clusterConfig(2560), 8, Port.h1, true);
+    return runCluster(init, clusterConfig(5120), 4, Port.h1, true);
 }
 
 fn h2cMode(init: std.process.Init) !void {
-    init.io.sleep(std.Io.Duration.fromMilliseconds(1500), .awake) catch {};
+    while (!http_ready.load(.acquire)) init.io.sleep(std.Io.Duration.fromMilliseconds(10), .awake) catch {};
     const cpus = std.Thread.getCpuCount() catch 8;
-    if (cpus >= 64) return runCluster(init, h2cConfig(256), 32, Port.h2c);
-    if (cpus >= 32) return runCluster(init, h2cConfig(512), 16, Port.h2c);
-    if (cpus >= 16) return runCluster(init, h2cConfig(1024), 8, Port.h2c);
-    return runCluster(init, h2cConfig(2048), 4, Port.h2c);
+    if (cpus >= 64) return runCluster(init, h2cConfig(256), 32, Port.h2c, false);
+    if (cpus >= 32) return runCluster(init, h2cConfig(512), 16, Port.h2c, false);
+    if (cpus >= 16) return runCluster(init, h2cConfig(1024), 8, Port.h2c, false);
+    return runCluster(init, h2cConfig(2048), 4, Port.h2c, false);
 }
 
 fn tlsMode(init: std.process.Init) !void {
-    init.io.sleep(std.Io.Duration.fromMilliseconds(1500), .awake) catch {};
+    while (!http_ready.load(.acquire)) init.io.sleep(std.Io.Duration.fromMilliseconds(10), .awake) catch {};
     var app = try uz.App(5120).init_https(
         init.io,
         try nullTerminated(init, certPath(init)),
@@ -284,7 +286,7 @@ fn tlsMode(init: std.process.Init) !void {
 }
 
 fn h3Mode(init: std.process.Init) !void {
-    init.io.sleep(std.Io.Duration.fromMilliseconds(1500), .awake) catch {};
+    while (!http_ready.load(.acquire)) init.io.sleep(std.Io.Duration.fromMilliseconds(10), .awake) catch {};
     var app = try uz.App(1280).init_http3(
         init.io,
         try nullTerminated(init, certPath(init)),
