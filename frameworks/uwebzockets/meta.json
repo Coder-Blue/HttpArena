@@ -1,7 +1,7 @@
 {
   "display_name": "uWebZockets",
   "language": "Zig",
-  "type": "emerging",
+  "type": "experimental",
   "mode": "standard",
   "engine": "libxev",
   "completeness": {
