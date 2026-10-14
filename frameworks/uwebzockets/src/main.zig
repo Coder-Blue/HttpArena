@@ -237,7 +237,12 @@ fn runCluster(init: std.process.Init, comptime config: uz.ServerConfig, comptime
     var group = try uz.Server.preset(init.io, config).build_cluster(
         std.heap.page_allocator,
         workers,
-        .{},
+        // HttpArena explicitly assigns a logical-CPU cpuset. uWebZockets'
+        // default affinity policy collapses SMT siblings to physical cores and
+        // cycles excess workers over those cores, which would leave half of a
+        // 64-CPU benchmark allocation unused. Leave scheduling to the kernel
+        // so every CPU in the container's cpuset can run a worker.
+        .{ .cpu_affinity = false },
     );
     defer group.deinit();
 
@@ -254,21 +259,31 @@ fn runCluster(init: std.process.Init, comptime config: uz.ServerConfig, comptime
 }
 
 fn httpMode(init: std.process.Init) !void {
-
     const cpus = std.Thread.getCpuCount() catch 8;
-    if (cpus >= 64) return runCluster(init, clusterConfig(768), 32, Port.h1, true);
-    if (cpus >= 32) return runCluster(init, clusterConfig(1280), 16, Port.h1, true);
-    if (cpus >= 16) return runCluster(init, clusterConfig(2560), 8, Port.h1, true);
-    return runCluster(init, clusterConfig(5120), 4, Port.h1, true);
+    // Each cluster worker owns an independent event loop.  The benchmark
+    // cpuset contains 64 logical CPUs (and the latency profile contains 8),
+    // so use every CPU made available to the container instead of leaving
+    // half of the allocation idle.  Halve the per-worker capacity at each
+    // step to retain the previous aggregate connection budget.
+    if (cpus >= 64) return runCluster(init, clusterConfig(384), 64, Port.h1, true);
+    if (cpus >= 32) return runCluster(init, clusterConfig(640), 32, Port.h1, true);
+    if (cpus >= 16) return runCluster(init, clusterConfig(1280), 16, Port.h1, true);
+    if (cpus >= 8) return runCluster(init, clusterConfig(2560), 8, Port.h1, true);
+    if (cpus >= 4) return runCluster(init, clusterConfig(5120), 4, Port.h1, true);
+    if (cpus >= 2) return runCluster(init, clusterConfig(10240), 2, Port.h1, true);
+    return runCluster(init, clusterConfig(20480), 1, Port.h1, true);
 }
 
 fn h2cMode(init: std.process.Init) !void {
     while (!http_ready.load(.acquire)) init.io.sleep(std.Io.Duration.fromMilliseconds(10), .awake) catch {};
     const cpus = std.Thread.getCpuCount() catch 8;
-    if (cpus >= 64) return runCluster(init, h2cConfig(256), 32, Port.h2c, false);
-    if (cpus >= 32) return runCluster(init, h2cConfig(512), 16, Port.h2c, false);
-    if (cpus >= 16) return runCluster(init, h2cConfig(1024), 8, Port.h2c, false);
-    return runCluster(init, h2cConfig(2048), 4, Port.h2c, false);
+    if (cpus >= 64) return runCluster(init, h2cConfig(128), 64, Port.h2c, false);
+    if (cpus >= 32) return runCluster(init, h2cConfig(256), 32, Port.h2c, false);
+    if (cpus >= 16) return runCluster(init, h2cConfig(512), 16, Port.h2c, false);
+    if (cpus >= 8) return runCluster(init, h2cConfig(1024), 8, Port.h2c, false);
+    if (cpus >= 4) return runCluster(init, h2cConfig(2048), 4, Port.h2c, false);
+    if (cpus >= 2) return runCluster(init, h2cConfig(4096), 2, Port.h2c, false);
+    return runCluster(init, h2cConfig(8192), 1, Port.h2c, false);
 }
 
 fn tlsMode(init: std.process.Init) !void {
@@ -287,7 +302,9 @@ fn tlsMode(init: std.process.Init) !void {
 
 fn h3Mode(init: std.process.Init) !void {
     while (!http_ready.load(.acquire)) init.io.sleep(std.Io.Duration.fromMilliseconds(10), .awake) catch {};
-    var app = try uz.App(1280).init_http3(
+    // h2load's TLS profile opens 1,024 connections.  Leave room for readiness
+    // probes and reconnects rather than exhausting the 1,280-slot pool.
+    var app = try uz.App(2048).init_http3(
         init.io,
         try nullTerminated(init, certPath(init)),
         try nullTerminated(init, keyPath(init)),

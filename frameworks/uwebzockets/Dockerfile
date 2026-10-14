@@ -3,7 +3,9 @@
 FROM alpine:3.20 AS build
 ARG TARGETARCH
 ARG ZIG_VERSION=0.16.0
-RUN apk add --no-cache ca-certificates curl git xz
+# lsquic, pulled by uWebZockets for HTTP/3, includes <sys/queue.h>.
+# Alpine supplies that path through bsd-compat-headers.
+RUN apk add --no-cache bsd-compat-headers ca-certificates curl git xz
 
 WORKDIR /server
 RUN set -eu; \
