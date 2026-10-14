@@ -312,7 +312,6 @@ fn h3Mode(init: std.process.Init) !void {
     defer app.deinit();
 
     try routes(&app);
-    try app.listen("0.0.0.0", Port.h2_h3);
     try app.listen_udp("0.0.0.0", Port.h2_h3);
     try app.run();
 }
