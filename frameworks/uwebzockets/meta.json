@@ -19,7 +19,6 @@
     "limited-conn",
     "json-comp",
     "json-tls",
-    "baseline-h2",
     "baseline-h2c",
     "json-h2c",
     "baseline-h3",
