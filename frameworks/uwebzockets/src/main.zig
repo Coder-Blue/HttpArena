@@ -302,8 +302,8 @@ fn tlsMode(init: std.process.Init) !void {
 
 fn h3Mode(init: std.process.Init) !void {
     while (!http_ready.load(.acquire)) init.io.sleep(std.Io.Duration.fromMilliseconds(10), .awake) catch {};
-    // h2load's TLS profile opens 1,024 connections.  Leave room for readiness
-    // probes and reconnects rather than exhausting the 1,280-slot pool.
+    // h2load's TLS profile opens 1,024 connections. Leave room for readiness
+    // probes and reconnects in the 2,048-slot pool.
     var app = try uz.App(2048).init_http3(
         init.io,
         try nullTerminated(init, certPath(init)),

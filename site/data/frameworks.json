@@ -2260,7 +2260,7 @@
   },
   "uWebZockets": {
     "dir": "uwebzockets",
-    "description": "Zero-allocation, shared-nothing Zig 0.16 framework: a typed Request/Response API over HTTP/1.1, HTTP/2, HTTP/3, WebSocket and JSON-RPC, served from bounded startup slabs. Each cluster worker runs its own libxev loop and is pinned to a distinct physical core; BoringSSL, lsquic and libdeflate are compiled in. Standard configuration, no tuning.",
+    "description": "Zero-allocation, shared-nothing Zig 0.16 framework: a typed Request/Response API over HTTP/1.1, HTTP/2, HTTP/3, WebSocket and JSON-RPC, served from bounded startup slabs. Each cluster worker runs its own libxev loop; the kernel schedules workers across the benchmark's assigned logical CPUs. BoringSSL, lsquic and libdeflate are compiled in. Standard configuration, no tuning.",
     "repo": "https://github.com/farbenbuilds/uWebZockets",
     "type": "experimental",
     "engine": "libxev",
